@@ -21,6 +21,7 @@ def quitter(w, Z, cdfs, means, bins=200):  # Table Size and Integration Precisio
     def s(t): return calculate_from_table(t, s_table, t_min, t_max)
     def I(t): return calculate_from_table(t, i_table, t_min, t_max)
     def ds(t): return calculate_from_table(t, d_table, t_min, t_max)
+    def cdf_integral(t): return calculate_from_table(t, cdf_integral_table, t_min, t_max)
 
     # Loop across each task (backwards).
     for i in range(n, 0, -1):
@@ -57,55 +58,37 @@ def quitter(w, Z, cdfs, means, bins=200):  # Table Size and Integration Precisio
         # Fill out s table with new values.
         for j in range(len(s_table)):
             t = t_min + j * inc
-
-
             s_table[j] = means[i - 1] + (1 - F(t_max - t)) * Z + I(t)
 
         # Invert s to find new threshold quitting value.
         if i != 1:
-            print(Z, t_min, q_table[i])
-            q_table[i - 1] = inverse(s, Z, t_min, q_table[i])
+            q_table[i - 1] = inverse(lambda t: s(t), Z, t_min, q_table[i])
 
         print("> Completed sub-step", n - i + 1, "/", n)
 
     print(">> Result:", list(q_table), "| Comparison", Z, "vs.", round(s_table[t_min], 3))
-    return s_table[t_min]
-
-
-from scipy.stats import norm
-
-N = 3
-CDFS = tuple([lambda x: norm.cdf(x, 40, 5) for _ in range(N)])
-MEANS = [40 for _ in range(N)]
-W = 110
+    return s_table[t_min], q_table
 
 
 def refine_it(cdfs, w, means, iterations=15, bins=100):
     z_lwr, z_upr = sum(means), sum(means)
 
-    z = quitter(w, z_lwr, cdfs, means, bins)
-    while z_lwr > z:
+    while z_lwr > quitter(w, z_lwr, cdfs, means, bins)[0]:
         z_lwr /= 2
-        z = quitter(w, z_lwr, cdfs, means, bins)
-
-    z = quitter(w, z_upr, cdfs, means, bins)
-    while z_upr < z:
+    while z_upr < quitter(w, z_upr, cdfs, means, bins)[0]:
         z_upr *= 2
-        z = quitter(w, z_upr, cdfs, means, bins)
 
+    q = np.array([w for _ in range(len(cdfs) + 1)])
     z_new = (z_lwr + z_upr) / 2
     for _ in range(iterations):
-        z = quitter(w, z_new, cdfs, means, bins)
+        z, q = quitter(w, z_new, cdfs, means, bins)
         if z == z_new:
             break
         elif z < z_new:
             z_upr = z_new
-        if z > z_new:
+        elif z > z_new:
             z_lwr = z_new
 
         z_new = (z_lwr + z_upr) / 2
 
-    return z_new
-
-
-print(refine_it(CDFS, W, MEANS))
+    return q

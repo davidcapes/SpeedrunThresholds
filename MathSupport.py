@@ -1,9 +1,8 @@
 import numpy as np
 from numba import njit
 
-
 @njit
-def calculate_from_table(x, y_table, x_table_lwr, x_table_upr, rounding=8):
+def calculate_from_table(x, y_table, x_table_lwr, x_table_upr, rounding=8, warning=True):
     """
     :param x: A floating point number.
     :param y_table: A numpy array of y values calculated for a set of equally spaced x values.
@@ -15,15 +14,18 @@ def calculate_from_table(x, y_table, x_table_lwr, x_table_upr, rounding=8):
     """
 
     # Ensure x can be calculated from table.
-    if not x_table_lwr <= x <= x_table_upr:
-        print(f"CustomError: In calculate_from_table; {x} not in the bounds [", x_table_lwr, ",", x_table_upr, "]")
-        return
-    elif len(y_table) == 0:
+    if len(y_table) == 0:
         print(f"CustomError: In calculate_from_table; y_table is empty.")
         return
     elif x_table_lwr == x_table_upr:
-        print(f"CustomError: In calculate_from_table; {str(x_table_lwr)}=x_table_lwr=x_table_upr={str(x_table_upr)}")
+        print(f"CustomError: In calculate_from_table; {x_table_lwr}=x_table_lwr=x_table_upr={str(x_table_upr)}")
         return
+    elif not (x_table_lwr <= x <= x_table_upr):
+        x = max(x, x_table_upr)
+        x = min(x, x_table_lwr)
+        if warning:
+            print("CustomWarning: In calculate_from_table;", x, "not in the bounds [",
+                  x_table_lwr, ",", x_table_upr, "]")
 
     # Calculate indexes and bounds for x.
     index_estimate = (len(y_table) - 1) * (x - x_table_lwr) / (x_table_upr - x_table_lwr)
@@ -46,11 +48,14 @@ def integral(f, a, b, n=1000):
 
     :return: An approximation of the integral of f between a and b.
     """
+    if a == b:
+        return 0
 
     result = (f(a) + f(b)) / 2
     for m in range(1, n):
         result += f(a + (m / n) * (b - a))
     result *= (b - a) / n
+
     return result
 
 
