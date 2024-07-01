@@ -1,94 +1,167 @@
 import numpy as np
+from numba import njit, prange
 
-from MathSupport import *
+
+@njit
+def index_table(index_float, table):
+
+    if not 0 <= index_float <= len(table) - 1:
+        index_float = min(index_float, len(table) - 1)
+        index_float = max(index_float, 0)
+        print("Bounding issue with table indexing.")
+
+    r = index_float - np.floor(index_float)
+    return (1 - r) * table[int(np.floor(index_float))] + r * table[int(np.ceil(index_float))]
 
 
-def quitter(w, Z, cdfs, means, bins=200):  # Table Size and Integration Precision.
+def create_probability_tables(pdfs, bins, x_min, x_max, extra=100):
 
-    # Initialize and define variables, tables, and functions.
-    n = len(cdfs)
-    t_min = 0
+    # Initialize.
+    tasks = len(pdfs)
+    bin_width = (x_max - x_min) / bins
+    f_table = np.zeros((tasks, bins + 1))
+    F_table = np.zeros((tasks, bins + 1))
 
-    q_table = np.zeros(n + 1)
-    q_table[n] = w
+    # Fill Tables.
+    for k in range(0, tasks):
+        f = pdfs[k]
 
-    s_table = np.zeros(bins + 1)
-    i_table = np.zeros(bins + 1)
-    cdf_integral_table = np.zeros(bins + 1)  # Conditional Expectation Table
-    d_table = np.zeros(bins + 1)  # s function derivative table
-    t_min, t_max = 0, q_table[n]
+        f_table[k][0] = f(x_min)
+        F_table[k][0] = 0
+        for i in range(1, bins + 1):
+            f_table[k][i] = f(x_min + i * bin_width)
 
-    def s(t): return calculate_from_table(t, s_table, t_min, t_max)
-    def I(t): return calculate_from_table(t, i_table, t_min, t_max)
-    def ds(t): return calculate_from_table(t, d_table, t_min, t_max)
-    def cdf_integral(t): return calculate_from_table(t, cdf_integral_table, t_min, t_max)
+            F_table[k][i] = F_table[k][i - 1]
+            for j in range(0, extra + 1):
+                x = x_min + bin_width * (i - 1 + j / extra)
+                F_table[k][i] = F_table[k][i] + f(x) / (extra + 1)
+        F_table[k] *= bin_width
 
-    # Loop across each task (backwards).
-    for i in range(n, 0, -1):
-        F = cdfs[i - 1]
+    return f_table, F_table
 
-        inc = (t_max - t_min) / (len(s_table) - 1)
-        t_max = q_table[i]
 
-        # CDF integral table.
-        for j in range(1, len(cdf_integral_table)):
-            inc = (t_max - t_min) / (len(i_table) - 1)
-            t = t_min + j * inc
-            cdf_integral_table[j] = cdf_integral_table[j - 1] + (F(t) + F(t - inc)) / 2
-        for j in range(1, len(cdf_integral_table)):
-            cdf_integral_table[j] *= (t_max - t_min) / j
+@njit(parallel=True)
+def score_z(f_table, F_table, means, w, z, print_warnings=False):
 
-        # Fill out derivative table for s.
-        for j in range(len(d_table)):
-            if j == 0:
-                d_table[j] = (s_table[j + 1] - s_table[j]) / inc
-            elif j == len(s_table) - 1:
-                d_table[j] = (s_table[j] - s_table[j - 1]) / inc
+    # Return values for if inversion fails
+    lwr_inv_fail, upr_inv_fail = False, False
+
+    # Initialize table parameters.
+    tasks = len(F_table)
+    bins = len(F_table[0]) - 1
+
+    # Initialize dynamic tables tables.
+    q_table = np.full(tasks + 1, w, dtype=np.float64)
+    q_table[0] = 0
+
+    s_table_prev = np.zeros(bins + 1, dtype=np.float64)
+    s_table_new = np.zeros(bins + 1, dtype=np.float64)
+
+    # Iterate tasks.
+    for k in range(tasks - 1, -1, -1):
+        q = q_table[k + 1]
+        q_index = q * bins / w
+
+        # Update S-Tables.
+        for i in prange(len(s_table_prev)):
+            s_table_prev[i] = s_table_new[i]
+        s_table_new.fill(0)
+
+        for i in prange(0, int(np.floor(q_index)) + 1):
+
+            # Add win factor.
+            for j in range(1, int(np.floor(q_index)) - i + 1):
+                f1 = s_table_prev[i + j - 1] * f_table[k][j - 1]
+                f2 = s_table_prev[i + j] * f_table[k][j]
+                s_table_new[i] += (w / bins) * (f1 + f2) / 2
+
+            width = (q_index - np.floor(q_index)) * (w / bins)
+            f1 = s_table_prev[int(np.floor(q_index))]
+            f2 = index_table(q_index, s_table_prev)
+            f1 *= f_table[k][int(np.floor(q_index)) - i]
+            f2 *= index_table(q_index - i, f_table[k])
+            s_table_new[i] += width * (f1 + f2) / 2
+
+            # Add loss factor.
+            s_table_new[i] += (1 - index_table(q_index - i, F_table[k])) * z
+
+            s_table_new[i] += means[k]
+
+        # Add index to allow interpolation at q.
+        if np.ceil(q) > np.floor(q):
+            r = q_index - np.floor(q_index)
+            s_table_new[int(np.ceil(q_index))] = (z - (1 - r) * s_table_new[int(np.floor(q_index))]) / r
+
+        # Quitting thresholds.
+        if k > 0:
+            if s_table_new[0] >= z:
+                q_table[k] = (s_table_new[bins] < z) * w
+                if print_warnings:
+                    print("Bounding issue with inversion (Lower).")
+                lwr_inv_fail = True
+                break
             else:
-                d_table[j] = (s_table[j + 1] - s_table[j - 1]) / inc
+                found = False
+                for i in range(1, int(np.ceil(q_index)) + 1):
+                    if s_table_new[i] >= z:
+                        r = (s_table_new[i] - z) / (s_table_new[i] - s_table_new[i - 1])
+                        q_table[k] = (i - r) * w / bins
+                        found = True
+                        break
+                if not found:
+                    if print_warnings:
+                        print("Bounding issue with inversion (Upper).")
+                    upr_inv_fail = True
+                    break
 
-        # Fill out i table.
-        for j in range(1, len(i_table) - 1):
-            t = t_min + j * inc
-
-            i_table[j] = F(t_max - t) * s(t_max) - F(t_min) * s(t)
-            i_table[j] -= integral(lambda q: F(q) * ds(q + t), t_min, t_max - t, len(i_table) - 1 - j)
-            i_table[j] /= (t_max - t) - t_min
-
-        # Fill out s table with new values.
-        for j in range(len(s_table)):
-            t = t_min + j * inc
-            s_table[j] = means[i - 1] + (1 - F(t_max - t)) * Z + I(t)
-
-        # Invert s to find new threshold quitting value.
-        if i != 1:
-            q_table[i - 1] = inverse(lambda t: s(t), Z, t_min, q_table[i])
-
-        print("> Completed sub-step", n - i + 1, "/", n)
-
-    print(">> Result:", list(q_table), "| Comparison", Z, "vs.", round(s_table[t_min], 3))
-    return s_table[t_min], q_table
+    # Results.
+    z_new = s_table_new[0]
+    return z_new, q_table, lwr_inv_fail, upr_inv_fail
 
 
-def refine_it(cdfs, w, means, iterations=15, bins=100):
-    z_lwr, z_upr = sum(means), sum(means)
+def get_q(pdfs, w, bins, means, iterations=25, multiplier=15.0, exp_lim=1000):
 
-    while z_lwr > quitter(w, z_lwr, cdfs, means, bins)[0]:
-        z_lwr /= 2
-    while z_upr < quitter(w, z_upr, cdfs, means, bins)[0]:
-        z_upr *= 2
+    # Choose initial location.
+    f_table, F_table = create_probability_tables(pdfs, bins, 0, w)
+    z_new, q_table, lwr, upr = score_z(f_table, F_table, means, w, multiplier * w)
+    if bins > 100:
+        q_table, z_new = get_q(pdfs, w, 100, means, iterations)
+    z_lwr, z_upr = z_new, z_new
 
-    q = np.array([w for _ in range(len(cdfs) + 1)])
-    z_new = (z_lwr + z_upr) / 2
-    for _ in range(iterations):
-        z, q = quitter(w, z_new, cdfs, means, bins)
-        if z == z_new:
+    # Exponential bound search.
+    z_new, q_table, lwr, upr = score_z(f_table, F_table, means, w, z_lwr)
+    for _ in range(exp_lim):
+        if z_new >= z_lwr and not lwr:
             break
-        elif z < z_new:
-            z_upr = z_new
-        elif z > z_new:
-            z_lwr = z_new
+        z_upr = z_lwr
+        z_lwr /= 2
+        z_new, q_table, lwr, upr = score_z(f_table, F_table, means, w, z_lwr)
+    for _ in range(exp_lim):
+        if z_new <= z_upr and not upr:
+            break
+        z_lwr = z_upr
+        z_upr *= 2
+        z_new, q_table, lwr, upr = score_z(f_table, F_table, means, w, z_upr)
 
-        z_new = (z_lwr + z_upr) / 2
+    # Bisect method.
+    for i in range(iterations):
+        mid = (z_lwr + z_upr) / 2
+        z_new, q_table, lwr, upr = score_z(f_table, F_table, means, w, mid)
 
-    return q
+        if z_new == mid:
+            break
+        elif z_new >= mid:
+            z_lwr = mid
+        elif z_new <= mid:
+            z_upr = mid
+    return q_table, z_new
+
+
+pdfs = [lambda x: 2 * np.exp(-2 * x), lambda x: 3 * np.exp(-3 * x), lambda x: 0.7 * np.exp(-0.7 * x)]
+w = 1
+bins = 1000
+means = [1/2, 1/3, 1/0.7]
+
+q, z = get_q(pdfs, w, bins, means)
+print("Restart Thresholds:", list(np.round(q, 3)))
+print("Expected Time:", np.round(z, 3))
