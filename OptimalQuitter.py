@@ -5,7 +5,7 @@ from numba import njit, prange
 @njit
 def index_table(index_float, table):
 
-    if not 0 <= index_float <= len(table) - 1:
+    if not 0 <= index_float < len(table):
         index_float = min(index_float, len(table) - 1)
         index_float = max(index_float, 0)
         print("Bounding issue with table indexing.")
