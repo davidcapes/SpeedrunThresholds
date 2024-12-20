@@ -1,36 +1,49 @@
 import numpy as np
 
-SIMULATORS = [lambda: np.random.exponential(1/2),
-              lambda: np.random.exponential(1/3),
-              lambda: np.random.exponential(1/0.7)]
-W = 1
-SIMULATIONS = 100000
-Q1 = [0, 0.4867, 0.7337, 10000]
 
+def simulator(simulator_functions, restart_scores, simulation_count, mid_task_restarting=False):
+    """
+    :param simulator_functions:
+    :param restart_scores:
+    :param simulation_count:
+    :param mid_task_restarting:
+    :return:
+    """
 
-def tester(simulators, q, w, simulations):
-    n = len(simulators)
-    total_time = 0
+    n = len(simulator_functions)
+    total_score = 0.0
+    goal_score = restart_scores[-1]
 
     # Simulate different runs.
-    for _ in range(simulations):
-        run_time = 0
+    for _ in range(simulation_count):
         task = 1
+        current_score = 0.0
+
         while True:
 
-            # Quit or complete.
-            if task > n or run_time > q[task - 1]:
-                total_time += run_time
-                if task > n and run_time <= w:
+            current_score += simulator_functions[task - 1]()
+            if task == n or current_score >= restart_scores[task - 1]:
+                if mid_task_restarting:
+                    current_score = min(current_score, restart_scores[task - 1])
+                total_score += current_score
+
+                if task == n and current_score < goal_score:
                     break
                 task = 1
-                run_time = 0
+                current_score = 0.0
 
-            # Do current task.
-            run_time += simulators[task - 1]()
-            task += 1
+            else:
+                task += 1
 
-    return total_time / simulations
+    return total_score / simulation_count
 
 
-print(tester(SIMULATORS, Q1, W, SIMULATIONS))
+if __name__ == "__main__":
+    simulator_functions = [lambda: np.random.exponential(1/2),
+                           lambda: np.random.exponential(1/3),
+                           lambda: np.random.exponential(1/0.7)]
+    restart_scores = [0.4867, 0.7337, 1]
+    simulation_count = 1000000
+
+    print(simulator(simulator_functions, restart_scores, simulation_count, False))
+    print(simulator(simulator_functions, restart_scores, simulation_count, True))
