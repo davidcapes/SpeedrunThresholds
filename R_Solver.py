@@ -1,6 +1,8 @@
 import numpy as np
 from MathSupport import *
 from numba import njit, prange
+from scipy.stats import expon, gamma, norm, uniform
+import matplotlib.pyplot as plt
 
 
 def create_probability_tables(pdfs, bins, x_min, x_max, extra_bins=1):
@@ -114,7 +116,7 @@ def get_r_table_GD(pdfs, means, w, n_bins=300, precision=0.001, precision_divide
     while curr_precision >= precision:
         changed = False
 
-        for i in range(n - 1):
+        for i in reversed(range(n - 1)):
             for direction in (-1, 1):
 
                 r = r_table[i] + direction * curr_precision
@@ -136,6 +138,7 @@ def get_r_table_GD(pdfs, means, w, n_bins=300, precision=0.001, precision_divide
 
         if not changed:
             curr_precision /= precision_divider
+        print("step", r_table)
 
     return r_table
 
@@ -180,27 +183,32 @@ def inv_step(exp_est, w, f_tables, F_tables, means, n_bins, warning=True):
     return exp_est_new, r_table
 
 
-def get_r_table_inv(pdfs, means, w, n_bins_max, bin_multiplier=10, iterations_max=25, precision=10**(-7),
-                    extra_bins=50, warning=False):
+# TODO: Implement small bin checking and max precision.
+def get_r_table_inv(pdfs, means, w, n_bins_max, exp_precision=1e-6, iterations_max=25, extra_bins=50, warning=False):
     f_tables, F_tables, cm_tables = create_probability_tables(pdfs, n_bins_max, 0, w, extra_bins=extra_bins)
-    score = lambda exp_est, n_bins: inv_step(exp_est, w, f_tables, F_tables, means, n_bins, warning)[0]
-
-    exp = w
-    n_bins = bin_multiplier
-    while n_bins < n_bins_max:
-        for _ in range(iterations_max):
-            exp_new = score(exp, n_bins)
-            if abs(exp_new - exp) < precision:
-                break
-            exp = exp_new
-        n_bins = min(n_bins_max, bin_multiplier * n_bins)
-
-    return inv_step(exp, w, f_tables, F_tables, means, n_bins_max, warning)[1]
+    score = lambda exp_est: inv_step(exp_est, w, f_tables, F_tables, means, n_bins_max, warning)[0]
+    exp_est = fx_equals_x(score, w, 18 * w, iterations_max)
+    return inv_step(exp_est, w, f_tables, F_tables, means, n_bins_max, warning)
 
 
 if __name__ == "__main__":
-    pdfs = [lambda x: 2 * np.exp(-2 * x), lambda x: 3 * np.exp(-3 * x), lambda x: 0.7 * np.exp(-0.7 * x)]
-    means = np.array([1/2, 1/3, 1/0.7], dtype=np.float64)
+    pdfs = [
+            lambda x: norm.pdf(x, loc=15, scale=np.sqrt(12)),
+            lambda x: uniform.pdf(x, loc=13, scale=18),
+            lambda x: expon.pdf(x, scale=20),
+            lambda x: (6 * (x - 13) ** 2) / (np.pi * ((x - 13)**6 + 4)),
+            lambda x: (norm.pdf(x, loc=13, scale=5) + norm.pdf(x, loc=14, scale=2) + norm.pdf(x, loc=17, scale=0.5)) / 3,
+            lambda x: gamma.pdf(x, a=5, scale=3),
+           ]
+
+    means = np.array([15, 18, 20, 13, 14 + 2/3, 15], dtype=np.float64)
+    w = 75
+
+    bins = 14000
+    f_tables, F_tables, cm_tables = create_probability_tables(pdfs, bins, 0, w / 2, extra_bins=1)
+
+    print(get_r_table_inv(pdfs, means, w, bins))
     bins = 1000
-    r_table = np.array([0.4867, 0.7337, 1.0])
-    w = r_table[-1]
+    f_tables, F_tables, cm_tables = create_probability_tables(pdfs, bins, 0, w / 2, extra_bins=1)
+    print(get_r_table_GD(pdfs, means, w, bins, precision=0.0005, mid_task_restarting=True))
+    print(get_r_table_GD(pdfs, means, w, bins, precision=0.0005, mid_task_restarting=False))

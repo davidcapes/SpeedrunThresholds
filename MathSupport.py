@@ -114,24 +114,82 @@ def table_inverse(y, y_table, x_lwr, x_upr, warning=True):
         return x_upr + 0.00000001
 
 
-def exponential_search_solve(f, lwr=1, upr=1, iterations=25, exp_lim=1000):
+def integral(f, a, b, bins):
+    """
+    :param f: A function that takes in and returns a floating point value.
+    :param a: Lower bound of integration.
+    :param b: Upper bound of integration.
+    :param bins: Number of bins to use for the integration.
+
+    :return: The integral of f(x) between a and b using the trapezoidal rule.
+    """
+
+    if a == b:
+        return 0
+    elif b < a:
+        return -integral(f, b, a, bins)
+
+    dx = (b - a) / bins
+    height_sum = (f(a) + f(b)) / 2
+    for i in range(1, bins):
+        x = a + i * dx
+        height_sum += f(x)
+
+    return height_sum * dx
+
+
+def inverse(f, y, iterations=25, max_precision=1e-10):
+
+    # Exponential bound search.
+    upr = abs(y)
+    lwr = -abs(y)
+
+    for _ in range(iterations):
+        if f(lwr) <= y:
+            break
+        upr = lwr
+        lwr *= 2
+
+    for _ in range(iterations):
+        if f(upr) >= y:
+            break
+        lwr = upr
+        upr *= 2
+
+    # Bisect method.
+    for _ in range(iterations):
+
+        mid = (lwr + upr) / 2
+        f_mid = f(mid)
+
+        if abs(f_mid - y) < max_precision:
+            break
+        elif f_mid < y:
+            lwr = mid
+        elif f_mid > y:
+            upr = mid
+
+    return (lwr + upr) / 2
+
+
+def fx_equals_x(f, lwr=1, upr=1, iterations=80, precision=1e-8):
     """
     :param f: A non-zero bijective function that takes a float as an argument and returns a float.
     :param lwr: Starting lower bound for the solution.
     :param upr: Starting upper bound for the solution.
     :param iterations: Number of iterations to run using the bisect method.
-    :param exp_lim: Number of iterations for the exponential search (limit is 2^exp_lim).
+    :param precision: Precision used for the bisect method.
 
     :return: A solution to f(x) = x.
     """
 
     # Exponential bound search.
-    for _ in range(exp_lim):
+    for _ in range(iterations):
         if f(lwr) >= lwr:
             break
         upr = lwr
         lwr /= 2
-    for _ in range(exp_lim):
+    for _ in range(iterations):
         if f(upr) <= upr:
             break
         lwr = upr
@@ -143,7 +201,7 @@ def exponential_search_solve(f, lwr=1, upr=1, iterations=25, exp_lim=1000):
         mid = (lwr + upr) / 2
         f_mid = f(mid)
 
-        if f_mid == mid:
+        if abs(f_mid - mid) < precision:
             break
         elif f_mid >= mid:
             lwr = mid

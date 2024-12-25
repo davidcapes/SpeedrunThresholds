@@ -1,25 +1,23 @@
 import pygame
-import random
 import csv
 import time
+import numpy as np
 
 # Initialize Pygame
 pygame.init()
+np.random.seed(501)
 
 # Game setup
-GOAL_SCORE = 15
-TASK_FUNCTIONS = [
-    lambda: random.gauss(5, 2),
-    lambda: random.uniform(2, 10),
-    lambda: random.triangular(1, 10, 4)
-]
-MID_TASK_RESTARTING = True
-PLAY_SPEED = 1 * MID_TASK_RESTARTING + 5 * (not MID_TASK_RESTARTING)
+from R_Tester import simulator_functions
+goal_score = 75
+mid_task_restarting = False
+play_speed = 2 * mid_task_restarting + 10 * (not mid_task_restarting)
+USERNAME = "test_user"
 
 # Screen setup
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Task Game")
+pygame.display.set_caption("Restarting Game")
 font = pygame.font.Font(None, 36)
 
 # Game state
@@ -29,11 +27,9 @@ total_score = 0.0
 completion_amount = 0
 score_data = []
 
-# Task state
 task_in_progress = False
 task_start_time = 0.0
 current_task_score = 0.0
-task_completion_time = 0.0
 
 
 def draw_text(text, y):
@@ -42,7 +38,7 @@ def draw_text(text, y):
 
 
 def save_data():
-    filename = f"GameData/game_data_{time.time()}.csv"
+    filename = f"GameData/game_data_{USERNAME}_{time.time()}.csv"
 
     with open(filename, 'w', newline='') as file:
         writer = csv.writer(file)
@@ -54,7 +50,7 @@ def save_data():
 
 def play_game():
     global current_task, current_score, total_score, completion_amount
-    global task_in_progress, task_start_time, current_task_score, task_completion_time
+    global task_in_progress, task_start_time, current_task_score
 
     running = True
     clock = pygame.time.Clock()
@@ -69,42 +65,43 @@ def play_game():
 
             if event.type == pygame.MOUSEBUTTONDOWN:
 
-                if event.button == 3 and (MID_TASK_RESTARTING or not task_in_progress):  # Right click - restart
+                if event.button == 3 and (mid_task_restarting or not task_in_progress):  # Right click - restart
                     if task_in_progress:
-                        total_score += min(PLAY_SPEED * (current_time - task_start_time), current_task_score)
+                        total_score += min(play_speed * (current_time - task_start_time), current_task_score)
                     current_task = 1
                     current_score = 0.0
                     task_in_progress = False
 
                 elif event.button == 1 and not task_in_progress:  # Left click - attempt task
-                    current_task_score = TASK_FUNCTIONS[current_task - 1]()
+                    current_task_score = simulator_functions[current_task - 1]()
                     task_in_progress = True
                     score_data.append((current_task, current_task_score))
                     task_start_time = current_time
 
         # Task completion logic
-        if task_in_progress and (PLAY_SPEED * (current_time - task_start_time) >= current_task_score):
+        if task_in_progress and (play_speed * (current_time - task_start_time) >= current_task_score):
             current_score += current_task_score
             total_score += current_task_score
             current_task += 1
             task_in_progress = False
 
-            if current_task > len(TASK_FUNCTIONS):
-                if current_score < GOAL_SCORE:
+            if current_task > len(simulator_functions):
+                if current_score < goal_score:
                     completion_amount += 1
                 current_task = 1
                 current_score = 0
+        current_task_time = task_in_progress * (play_speed * (current_time - task_start_time))
 
         # Drawing
         screen.fill((0, 0, 0))
-        draw_text(f"Goal (G): {GOAL_SCORE}", 10)
+        draw_text(f"Goal score: {goal_score}", 10)
         draw_text(f"Task: {current_task}", 50)
-        draw_text(f"Current score: {current_score:.2f}", 90)
-        draw_text(f"Total score: {total_score:.2f}", 130)
+        draw_text(f"Current score: {current_score + current_task_time:.2f}", 90)
+        draw_text(f"Total score: {total_score + current_task_time:.2f}", 130)
         draw_text(f"Completions: {completion_amount}", 170)
 
         if task_in_progress:
-            draw_text(f"Task in progress: {PLAY_SPEED * (current_time - task_start_time):.2f}", 210)
+            draw_text(f"Task in progress", 210)
         else:
             draw_text("Click to attempt task", 210)
 
